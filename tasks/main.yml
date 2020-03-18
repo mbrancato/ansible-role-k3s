@@ -141,7 +141,7 @@
     remote_src: yes
   when: k3s_custom_cni | bool
 
-- name: Create temporary directory for KubeVirt
+- name: Create temporary directory for Flannel
   tempfile:
     state: directory
     suffix: flannel

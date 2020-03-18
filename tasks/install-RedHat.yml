@@ -8,6 +8,6 @@
 - name: Install required packages
   package:
     name:
-    - "{{ 'python3-setuptools' if ansible_facts['python']['version'].major == '3' else 'python-setuptools' }}"
-    - "{{ 'python3-pip' if ansible_facts['python']['version'].major == '3' else 'python-pip' }}"
+    - "{{ 'python3-setuptools' if ansible_facts['python']['version'].major == 3 else 'python-setuptools' }}"
+    - "{{ 'python3-pip' if ansible_facts['python']['version'].major == 3 else 'python-pip' }}"
     state: present
