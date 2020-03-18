@@ -1,0 +1,8 @@
+---
+- name: Install required packages
+  apt:
+    update_cache: no
+    name:
+    - "{{ 'python3-setuptools' if ansible_facts['python']['version'].major == '3' else 'python-setuptools' }}"
+    - "{{ 'python3-pip' if ansible_facts['python']['version'].major == '3' else 'python-pip' }}"
+    state: present

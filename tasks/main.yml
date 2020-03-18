@@ -1,0 +1,299 @@
+---
+- include_tasks: "install-{{ ansible_facts.os_family }}.yml"
+
+# Get the correct version
+- name: Check if k3s exists
+  stat:
+    path: /usr/local/bin/k3s
+  register: k3s_bin
+
+- name: Check k3s version
+  shell: |
+    /usr/local/bin/k3s --version | awk '{print $3}'
+  register: k3s_bin_version
+  when:
+  - k3s_bin.stat.exists
+
+- name: Delete old k3s binary
+  file:
+    path: /usr/local/bin/k3s
+    state: absent
+  when:
+  - k3s_bin.stat.exists
+  - k3s_bin_version.stdout is not version(k3s_version, '==')
+
+- name: Download k3s binary
+  vars:
+    k3s_bins:
+      x86_64-64: k3s
+      arm-64: k3s-arm64
+      arm-32: k3s-armhf
+    target_arch: "{{ ansible_facts.architecture }}-{{ ansible_facts.userspace_bits }}"
+  get_url:
+      url: https://github.com/rancher/k3s/releases/download/{{ k3s_version }}/{{ k3s_bins[target_arch] }}
+      dest: /usr/local/bin/k3s
+      owner: root
+      group: root
+      mode: 755
+  when: >-
+    not k3s_bin.stat.exists
+    or
+    k3s_bin_version.stdout is not version(k3s_version, '==')
+
+# Configure networking
+- name: Load the bridge netfilter module
+  modprobe:
+    name: br_netfilter
+
+- name: Add bridge netfilter to load on startup
+  lineinfile:
+    path: /etc/modules
+    state: present
+    line: 'br_netfilter'
+
+- name: Enable IPv4 forwarding
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: yes
+
+- name: Enable IPv6 forwarding
+  sysctl:
+    name: net.ipv6.conf.all.forwarding
+    value: "1"
+    state: present
+    reload: yes
+
+- name: Enable bridge traffic to be processed by iptables
+  sysctl:
+    name: "{{ item }}"
+    value: "1"
+    state: present
+    reload: yes
+  with_items:
+  - net.bridge.bridge-nf-call-arptables
+  - net.bridge.bridge-nf-call-ip6tables
+  - net.bridge.bridge-nf-call-iptables
+
+# copy files into place
+- name: Check if k3s env file exists
+  stat:
+    path: "{{ systemd_directory }}/k3s.service.env"
+  register: k3s_env
+  when: inventory_hostname == play_hosts[0]
+
+- name: Generate cluster token
+  shell: uuidgen
+  register: k3s_token_gen
+  when:
+  - inventory_hostname == play_hosts[0]
+  - not k3s_env.stat.exists
+
+- name: Register cluster token on primary
+  set_fact:
+    k3s_token: "{{ k3s_token_gen.stdout }}"
+  when:
+  - inventory_hostname == play_hosts[0]
+  - not k3s_env.stat.exists
+
+- name: Set K3s environment file on primary
+  template:
+    src: k3s.service.env.j2
+    dest: "{{ systemd_directory }}/k3s.service.env"
+  when:
+  - inventory_hostname == play_hosts[0]
+  - not k3s_env.stat.exists
+  register: k3s_env_file_primary
+
+- name: Read cluster token
+  shell: grep "^K3S_TOKEN" "{{ systemd_directory }}/k3s.service.env" | cut -d = -f 2
+  register: k3s_token_read
+  when: inventory_hostname == play_hosts[0]
+
+- name: Register cluster token
+  set_fact:
+    k3s_token: "{{ k3s_token_read.stdout }}"
+  when: inventory_hostname == play_hosts[0]
+
+- name: Create CNI config directory
+  file:
+    path: /etc/cni/net.d
+    state: directory
+  when: k3s_custom_cni | bool
+
+- name: Create CNI bin directory
+  file:
+    path: /opt/cni/bin
+    state: directory
+  when: k3s_custom_cni | bool
+
+- name: Install standard CNI plugins
+  vars:
+    k3s_bins:
+      x86_64-64: amd64
+      arm-64: arm64
+      arm-32: arm
+    target_arch: "{{ ansible_facts.architecture }}-{{ ansible_facts.userspace_bits }}"
+  unarchive:
+    src: https://github.com/containernetworking/plugins/releases/download/{{ k3s_cni_version }}/cni-plugins-linux-{{ k3s_bins[target_arch] }}-{{ k3s_cni_version }}.tgz
+    dest: /opt/cni/bin
+    remote_src: yes
+  when: k3s_custom_cni | bool
+
+- name: Create temporary directory for KubeVirt
+  tempfile:
+    state: directory
+    suffix: flannel
+  register: flannel_temp
+  when: k3s_custom_cni | bool
+
+- name: Download Flannel DaemonSet manifests
+  get_url:
+    url: https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+    dest: "{{ flannel_temp.path }}/kube-flannel.yml"
+  delegate_to: "{{ play_hosts[0] }}"
+  run_once: yes
+  when: k3s_custom_cni | bool
+
+- name: Set Network in Flannel DaemonSet manifests
+  lineinfile:
+    path: "{{ flannel_temp.path }}/kube-flannel.yml"
+    regexp: '^\s+"Network":'
+    line: '      "Network": "{{ k3s_cidr_cluster }}",'
+  delegate_to: "{{ play_hosts[0] }}"
+  run_once: yes
+  when: k3s_custom_cni | bool
+
+- name: Set K3s environment file
+  template:
+    src: k3s.service.env.j2
+    dest: "{{ systemd_directory }}/k3s.service.env"
+    owner: root
+    group: root
+    mode: "0755"
+  register: k3s_env_file
+
+- name: Build service options
+  set_fact:
+    k3s_server_options: >-
+      --cluster-cidr {{ k3s_cidr_cluster }}
+      --service-cidr {{ k3s_cidr_service }}
+      {% if not k3s_enable_traefik %}--no-deploy=traefik{% endif %}
+      {% if not k3s_enable_servicelb %}--no-deploy=servicelb{% endif %}
+      {% if k3s_custom_cni %}--flannel-backend=none{% endif %}
+
+- name: Install K3s service file
+  template:
+    src: k3s.service.j2
+    dest: "{{ systemd_directory }}/k3s.service"
+    owner: root
+    group: root
+    mode: "0755"
+  register: k3s_service_file
+
+- name: Enable K3s service
+  systemd:
+    name: k3s
+    daemon_reload: yes
+    state: restarted
+    enabled: yes
+  when: >-
+    k3s_service_file.changed
+    or
+    k3s_env_file.changed
+    or
+    k3s_env_file_primary.changed
+
+- name: Wait for node-token
+  wait_for:
+    path: /var/lib/rancher/k3s/server/node-token
+
+- name: Install OpenShift Python client
+  pip:
+    name: openshift
+  delegate_to: "{{ play_hosts[0] }}"
+  run_once: yes
+  when: k3s_custom_cni | bool
+
+- name: Install Flannel DaemonSet manifests
+  k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    src: "{{ flannel_temp.path }}/kube-flannel.yml"
+    state: present
+  delegate_to: "{{ play_hosts[0] }}"
+  run_once: yes
+  when: k3s_custom_cni | bool
+
+- name: Create kubectl symlink
+  file:
+    src: /usr/local/bin/k3s
+    dest: /usr/local/bin/kubectl
+    state: link
+
+- name: Create crictl symlink
+  file:
+    src: /usr/local/bin/k3s
+    dest: /usr/local/bin/crictl
+    state: link
+
+- name: Set K3s master
+  set_fact:
+    k3s_master: "https://{{ hostvars[play_hosts[0]].ansible_default_ipv4.address }}:6443"
+
+- name: Read master config
+  shell: cat /etc/rancher/k3s/k3s.yaml
+  register: k3s_config_read
+  when: inventory_hostname == play_hosts[0]
+
+- name: Register master config
+  set_fact:
+    k3s_master_config: "{{ k3s_config_read.stdout | from_yaml }}"
+  when: inventory_hostname == play_hosts[0]
+
+- name: Read node token
+  shell: cat /var/lib/rancher/k3s/server/node-token
+  register: k3s_token_cmd
+  when: inventory_hostname == play_hosts[0]
+
+- name: Set node token
+  set_fact:
+    k3s_token: "{{ k3s_token_cmd.stdout }}"
+  when: inventory_hostname == play_hosts[0]
+
+- name: Create temporary CA file
+  tempfile:
+    state: file
+    suffix: ca
+  register: k3s_ca_temp
+  delegate_to: localhost
+  run_once: yes
+  become: no
+  when: k3s_set_kubeconfig | bool
+
+- name: Copy K3s CA cert
+  copy:
+    content: "{{ hostvars[play_hosts[0]].k3s_master_config.clusters[0].cluster['certificate-authority-data'] | b64decode }}"
+    dest: "{{ k3s_ca_temp.path }}"
+  delegate_to: localhost
+  run_once: yes
+  become: no
+  when: k3s_set_kubeconfig | bool
+
+- name: Configure kubectl access
+  shell: |
+    kubectl config set-cluster {{ k3s_cluster_name }} --server={{ k3s_master }} \
+    --certificate-authority={{ k3s_ca_temp.path }} --embed-certs=true
+
+    kubectl config set-credentials {{ hostvars[play_hosts[0]].k3s_master_config.users[0]['name'] }}-{{ k3s_cluster_name }} \
+    --username={{ hostvars[play_hosts[0]].k3s_master_config.users[0].user['username'] }} \
+    --password={{ hostvars[play_hosts[0]].k3s_master_config.users[0].user['password'] }}
+
+    kubectl config set-context {{ hostvars[play_hosts[0]].k3s_master_config.users[0]['name'] }}-{{ k3s_cluster_name }} \
+    --cluster={{ k3s_cluster_name }} --namespace=default --user={{ hostvars[play_hosts[0]].k3s_master_config.users[0]['name'] }}-{{ k3s_cluster_name }}
+
+    kubectl config use-context {{ hostvars[play_hosts[0]].k3s_master_config.users[0]['name'] }}-{{ k3s_cluster_name }}
+  delegate_to: localhost
+  run_once: yes
+  become: no
+  when: k3s_set_kubeconfig | bool
