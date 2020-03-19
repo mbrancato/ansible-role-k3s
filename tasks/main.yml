@@ -113,8 +113,7 @@
 
 - name: Register cluster token
   set_fact:
-    k3s_token: "{{ k3s_token_read.stdout }}"
-  when: inventory_hostname == play_hosts[0]
+    k3s_token: "{{ hostvars[play_hosts[0]]['k3s_token_read'].stdout }}"
 
 - name: Create CNI config directory
   file:
@@ -165,6 +164,10 @@
   run_once: yes
   when: k3s_custom_cni | bool
 
+- name: Set K3s master
+  set_fact:
+    k3s_master: "https://{{ hostvars[play_hosts[0]].ansible_default_ipv4.address }}:6443"
+
 - name: Set K3s environment file
   template:
     src: k3s.service.env.j2
@@ -192,7 +195,7 @@
     mode: "0755"
   register: k3s_service_file
 
-- name: Enable K3s service
+- name: Enable K3s service on primary
   systemd:
     name: k3s
     daemon_reload: yes
@@ -204,6 +207,23 @@
     k3s_env_file.changed
     or
     k3s_env_file_primary.changed
+  when:
+  - inventory_hostname == play_hosts[0]
+
+- name: Enable K3s service on remaining cluster nodes
+  systemd:
+    name: k3s
+    daemon_reload: yes
+    state: restarted
+    enabled: yes
+  when: >-
+    k3s_service_file.changed
+    or
+    k3s_env_file.changed
+    or
+    k3s_env_file_primary.changed
+  when:
+  - inventory_hostname != play_hosts[0]
 
 - name: Wait for node-token
   wait_for:
@@ -237,10 +257,6 @@
     dest: /usr/local/bin/crictl
     state: link
 
-- name: Set K3s master
-  set_fact:
-    k3s_master: "https://{{ hostvars[play_hosts[0]].ansible_default_ipv4.address }}:6443"
-
 - name: Read master config
   shell: cat /etc/rancher/k3s/k3s.yaml
   register: k3s_config_read
@@ -249,16 +265,6 @@
 - name: Register master config
   set_fact:
     k3s_master_config: "{{ k3s_config_read.stdout | from_yaml }}"
-  when: inventory_hostname == play_hosts[0]
-
-- name: Read node token
-  shell: cat /var/lib/rancher/k3s/server/node-token
-  register: k3s_token_cmd
-  when: inventory_hostname == play_hosts[0]
-
-- name: Set node token
-  set_fact:
-    k3s_token: "{{ k3s_token_cmd.stdout }}"
   when: inventory_hostname == play_hosts[0]
 
 - name: Create temporary CA file
