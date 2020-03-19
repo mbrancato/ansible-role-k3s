@@ -5,7 +5,7 @@ k3s_cni_version: v0.8.5
 k3s_cidr_cluster: 10.42.0.0/16
 k3s_cidr_service: 10.43.0.0/16
 k3s_ha: false
-systemd_directory: /etc/systemd/system
+k3s_systemd_directory: /etc/systemd/system
 k3s_custom_cni: false
 k3s_enable_traefik: true
 k3s_enable_servicelb: true

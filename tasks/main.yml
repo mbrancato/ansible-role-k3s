@@ -79,7 +79,7 @@
 # copy files into place
 - name: Check if k3s env file exists
   stat:
-    path: "{{ systemd_directory }}/k3s.service.env"
+    path: "{{ k3s_systemd_directory }}/k3s.service.env"
   register: k3s_env
   when: inventory_hostname == play_hosts[0]
 
@@ -100,14 +100,14 @@
 - name: Set K3s environment file on primary
   template:
     src: k3s.service.env.j2
-    dest: "{{ systemd_directory }}/k3s.service.env"
+    dest: "{{ k3s_systemd_directory }}/k3s.service.env"
   when:
   - inventory_hostname == play_hosts[0]
   - not k3s_env.stat.exists
   register: k3s_env_file_primary
 
 - name: Read cluster token
-  shell: grep "^K3S_TOKEN" "{{ systemd_directory }}/k3s.service.env" | cut -d = -f 2
+  shell: grep "^K3S_TOKEN" "{{ k3s_systemd_directory }}/k3s.service.env" | cut -d = -f 2
   register: k3s_token_read
   when: inventory_hostname == play_hosts[0]
 
@@ -168,7 +168,7 @@
 - name: Set K3s environment file
   template:
     src: k3s.service.env.j2
-    dest: "{{ systemd_directory }}/k3s.service.env"
+    dest: "{{ k3s_systemd_directory }}/k3s.service.env"
     owner: root
     group: root
     mode: "0755"
@@ -186,7 +186,7 @@
 - name: Install K3s service file
   template:
     src: k3s.service.j2
-    dest: "{{ systemd_directory }}/k3s.service"
+    dest: "{{ k3s_systemd_directory }}/k3s.service"
     owner: root
     group: root
     mode: "0755"
