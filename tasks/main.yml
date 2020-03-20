@@ -202,13 +202,18 @@
     state: restarted
     enabled: yes
   when: >-
-    k3s_service_file.changed
-    or
-    k3s_env_file.changed
-    or
-    k3s_env_file_primary.changed
-  when:
-  - inventory_hostname == play_hosts[0]
+    (
+      k3s_service_file.changed
+      or
+      k3s_env_file.changed
+      or
+      k3s_env_file_primary.changed
+    )
+    and
+    inventory_hostname == play_hosts[0]
+  register: enable_k3s_primary
+  until: enable_k3s_primary is not failed
+  retries: 5
 
 - name: Enable K3s service on remaining cluster nodes
   systemd:
@@ -217,13 +222,18 @@
     state: restarted
     enabled: yes
   when: >-
-    k3s_service_file.changed
-    or
-    k3s_env_file.changed
-    or
-    k3s_env_file_primary.changed
-  when:
-  - inventory_hostname != play_hosts[0]
+    (
+      k3s_service_file.changed
+      or
+      k3s_env_file.changed
+      or
+      k3s_env_file_primary.changed
+    )
+    and
+    inventory_hostname != play_hosts[0]
+  register: enable_k3s_nodes
+  until: enable_k3s_nodes is not failed
+  retries: 5
 
 - name: Wait for node-token
   wait_for:
