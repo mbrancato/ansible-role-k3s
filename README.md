@@ -85,7 +85,7 @@ added as a new context (requires kubectl)
 
 - Specify the [CNI plugins](https://github.com/containernetworking/plugins/releases) version to install
   - Only used when `k3s_custom_cni` is *true*
-- Default: *v0.8.5*
+- Default: *v0.8.6*
 
 ### `k3s_datastore_endpoint`
 
