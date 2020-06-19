@@ -1,4 +1,12 @@
 ---
+- name: Check if HA setup is valid
+  fail:
+    msg: Both the embedded HA and an external HA datastore are not supported
+  when: >-
+    (k3s_ha | bool)
+    and
+    k3s_datastore_endpoint != ''
+
 - include_tasks: "install-{{ ansible_facts.os_family }}.yml"
 
 # Get the correct version
@@ -90,21 +98,21 @@
   - inventory_hostname == play_hosts[0]
   - not k3s_env.stat.exists
 
-- name: Register cluster token on primary
+- name: Register cluster token on initial node
   set_fact:
     k3s_token: "{{ k3s_token_gen.stdout }}"
   when:
   - inventory_hostname == play_hosts[0]
   - not k3s_env.stat.exists
 
-- name: Set K3s environment file on primary
+- name: Set K3s environment file on initial node
   template:
     src: k3s.service.env.j2
     dest: "{{ k3s_systemd_directory }}/k3s.service.env"
   when:
   - inventory_hostname == play_hosts[0]
   - not k3s_env.stat.exists
-  register: k3s_env_file_primary
+  register: k3s_env_file_initial
 
 - name: Read cluster token
   shell: grep "^K3S_TOKEN" "{{ k3s_systemd_directory }}/k3s.service.env" | cut -d = -f 2
@@ -166,7 +174,7 @@
 
 - name: Set K3s master
   set_fact:
-    k3s_master: "https://{{ hostvars[play_hosts[0]].ansible_default_ipv4.address }}:6443"
+    k3s_master: "https://{{ hostvars[play_hosts[0]].ansible_hostname }}:6443"
 
 - name: Set K3s environment file
   template:
@@ -195,7 +203,19 @@
     mode: "0755"
   register: k3s_service_file
 
-- name: Enable K3s service on primary
+- name: Enable K3s service on initial node
+  systemd:
+    name: k3s
+    daemon_reload: yes
+    state: started
+    enabled: yes
+  when:
+    - inventory_hostname == play_hosts[0]
+  register: enable_k3s_initial
+  until: enable_k3s_initial is not failed
+  retries: 5
+
+- name: Restart K3s service on initial node
   systemd:
     name: k3s
     daemon_reload: yes
@@ -205,20 +225,30 @@
     (
       k3s_service_file.changed
       or
-      k3s_env_file.changed
-      or
-      k3s_env_file_primary.changed
+      k3s_env_file_initial.changed
     )
     and
     inventory_hostname == play_hosts[0]
-  register: enable_k3s_primary
-  until: enable_k3s_primary is not failed
+  register: restart_k3s_initial
+  until: restart_k3s_initial is not failed
   retries: 5
 
 - name: Enable K3s service on remaining cluster nodes
   systemd:
     name: k3s
     daemon_reload: yes
+    state: started
+    enabled: yes
+  when:
+    - inventory_hostname != play_hosts[0]
+  register: enable_k3s_nodes
+  until: enable_k3s_nodes is not failed
+  retries: 15
+
+- name: Restart K3s service on remaining cluster nodes if needed
+  systemd:
+    name: k3s
+    daemon_reload: yes
     state: restarted
     enabled: yes
   when: >-
@@ -226,14 +256,12 @@
       k3s_service_file.changed
       or
       k3s_env_file.changed
-      or
-      k3s_env_file_primary.changed
     )
     and
     inventory_hostname != play_hosts[0]
-  register: enable_k3s_nodes
-  until: enable_k3s_nodes is not failed
-  retries: 5
+  register: restart_k3s_nodes
+  until: restart_k3s_nodes is not failed
+  retries: 15
 
 - name: Wait for node-token
   wait_for:
@@ -245,6 +273,16 @@
   delegate_to: "{{ play_hosts[0] }}"
   run_once: yes
   when: k3s_custom_cni | bool
+
+- name: Get nodes from cluster
+  k8s_info:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    kind: Node
+  delegate_to: "{{ play_hosts[0] }}"
+  register: node_list
+  when: k3s_custom_cni | bool
+  until: node_list is not failed
+  retries: 15
 
 - name: Install Flannel DaemonSet manifests
   k8s:

@@ -10,4 +10,5 @@
     name:
     - "{{ 'python3-setuptools' if ansible_facts['python']['version'].major == 3 else 'python-setuptools' }}"
     - "{{ 'python3-pip' if ansible_facts['python']['version'].major == 3 else 'python-pip' }}"
+    - util-linux
     state: present

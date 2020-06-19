@@ -1,10 +1,20 @@
 k3s_cluster_name: k3s
-k3s_version: v1.17.3+k3s1
+k3s_version: v1.18.4+k3s1
 k3s_set_kubeconfig: true
 k3s_cni_version: v0.8.5
 k3s_cidr_cluster: 10.42.0.0/16
 k3s_cidr_service: 10.43.0.0/16
+
+# Built-in HA with SQLite Embedded
 k3s_ha: false
+
+# External datastore HA
+# https://rancher.com/docs/k3s/latest/en/installation/datastore/#datastore-endpoint-format-and-functionality
+k3s_datastore_endpoint: ''
+k3s_datastore_cafile: ''
+k3s_datastore_certfile: ''
+k3s_datastore_keyfile: ''
+
 k3s_systemd_directory: /etc/systemd/system
 k3s_custom_cni: false
 k3s_enable_traefik: true
