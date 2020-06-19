@@ -72,7 +72,7 @@ added as a new context (requires kubectl)
 
 ### `k3s_ha`
 
-- Deploy K3s in high availability cluster mode
+- Deploy K3s in high availability cluster mode using the embedded Dqlite database
 - Default: *false*
 
 ### `k3s_custom_cni`
@@ -86,3 +86,28 @@ added as a new context (requires kubectl)
 - Specify the [CNI plugins](https://github.com/containernetworking/plugins/releases) version to install
   - Only used when `k3s_custom_cni` is *true*
 - Default: *v0.8.5*
+
+### `k3s_datastore_endpoint`
+
+- Specify the connection string for an external datastore
+  - This replaces the built-in SQLite datastore
+  - See the [datastore endpoint](https://rancher.com/docs/k3s/latest/en/installation/datastore/#datastore-endpoint-format-and-functionality) for formatting requirements
+- Default: ''
+
+### `k3s_datastore_cafile`
+
+- The location of the file containing the public certificate of the datastore's Certificate Authority (CA) for datastores using TLS
+  - This role does **not** create this file
+- Default: ''
+
+### `k3s_datastore_certfile`
+
+- The location of the file containing the public certificate used by the client when connecting to the datastore
+  - This role does **not** create this file
+- Default: ''
+
+### `k3s_datastore_keyfile`
+
+- The location of the file containing the private key used by the client when connecting to the datastore
+  - This role does **not** create this file
+- Default: ''
